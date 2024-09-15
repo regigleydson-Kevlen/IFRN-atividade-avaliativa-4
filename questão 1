@@ -1,0 +1,130 @@
+import requests
+import json
+import os
+from datetime import datetime
+from tabulate import tabulate
+
+# ele vai coloca os numeros junto dos meses para nomes
+meses_nomes = {
+    '01': 'Janeiro', '02': 'Fevereiro', '03': 'Março', '04': 'Abril',
+    '05': 'Maio', '06': 'Junho', '07': 'Julho', '08': 'Agosto',
+    '09': 'Setembro', '10': 'Outubro', '11': 'Novembro', '12': 'Dezembro'
+}
+
+# pega o ano atual: para ter uma ideia de ate que ano o programa vai rodar(limite)
+ano_atual = datetime.now().year
+
+# pergunta o ano, e ve se esta de acordo
+while True:
+    ano_informado = input(f"digite o ano que deseja (entre 1985 e {ano_atual}): ")
+    if ano_informado.isdigit() and 1985 <= int(ano_informado) <= ano_atual:
+        ano_informado = int(ano_informado)
+        break
+    else:
+        print(f"O ano deve ser entre 1985 e {ano_atual}.")
+
+# a URL da  sua API
+strURL = 'https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/Moedas?$top=100&$format=json'
+
+# entra na API e pegar as moedas
+try:
+    response = requests.get(strURL)
+    response.raise_for_status()
+    dictMoedas = response.json()
+except requests.exceptions.RequestException as e:
+    print(f"Erro ao acessar a API: {e}")
+    exit()
+
+# mostra na tabela as moedas que podem ser usadas
+moedas_disponiveis = [(moeda['simbolo'], moeda['nomeFormatado']) for moeda in dictMoedas['value']]
+tabela_moedas = tabulate(moedas_disponiveis, headers=["Sigla", "Nome da Moeda"], tablefmt="grid")
+
+print("\nMoedas Disponíveis:")
+print(tabela_moedas)
+# daqui pra frente é uma coisas complicada ksksks
+# perdi uma moeda valida
+while True:
+    moeda_informada = input("Informe a sua moeda desejada (sigla): ").upper()
+    if any(moeda_informada == moeda['simbolo'] for moeda in dictMoedas['value']):
+        break
+    else:
+        print("Moeda inválida. escolha uma moeda da tabela acima.")
+
+# Monta a URL da API para obter as cotações da moeda no ano desejado
+strURL = 'https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/'
+strURL += 'CotacaoMoedaPeriodo(moeda=@moeda,dataInicial='
+strURL += '@dataInicial,dataFinalCotacao=@dataFinalCotacao)?'
+strURL += f'@moeda=%27{moeda_informada}%27&@dataInicial=%2701-01-{ano_informado}%27&'
+strURL += f'@dataFinalCotacao=%2712-31-{ano_informado}%27&$format=json'
+
+# acessar a API e obtem as cotações
+try:
+    response = requests.get(strURL)
+    response.raise_for_status()
+    dictCotacoes = response.json()
+except requests.exceptions.RequestException as e:
+    print(f"Erro ao tenta acessar a API: {e}")
+    print("tente novamente mudando ano ou moeda.")
+    exit()
+
+# Verifica se a resposta contém dados validos
+if not dictCotacoes.get('value'):
+    print("Nao há dados disponíveis para a moeda e o ano informados.")
+    exit()
+
+# Calcula as médias compra e venda
+medias = {}
+for cotacao in dictCotacoes['value']:
+    data = cotacao['dataHoraCotacao'].split('T')[0]
+    mes = data[5:7]
+    if mes not in medias:
+        medias[mes] = {'mediaCompra': [], 'mediaVenda': []}
+    if cotacao['cotacaoCompra'] is not None and cotacao['cotacaoVenda'] is not None:
+        medias[mes]['mediaCompra'].append(cotacao['cotacaoCompra'])
+        medias[mes]['mediaVenda'].append(cotacao['cotacaoVenda'])
+
+# Calcula as medias para cada mes e arredondando para 5 casas decimais
+medias_calculadas = {}
+for mes in medias:
+    if medias[mes]['mediaCompra'] and medias[mes]['mediaVenda']:
+        mediaCompra = sum(medias[mes]['mediaCompra']) / len(medias[mes]['mediaCompra'])
+        mediaVenda = sum(medias[mes]['mediaVenda']) / len(medias[mes]['mediaVenda'])
+        medias_calculadas[mes] = {
+            'mediaCompra': round(mediaCompra, 5),
+            'mediaVenda': round(mediaVenda, 5)
+        }
+    else:
+        print(f"Sem dados suficientes para o mês {meses_nomes[mes]}.")
+
+# os nomes dos arquivo
+nome_arquivo_json = f'medias_cotacoes_{moeda_informada}_{ano_informado}.json'                #meu deus, que codigo grande kkk
+nome_arquivo_csv = f'medias_cotacoes_{moeda_informada}_{ano_informado}.csv'
+
+# olhar se o arquivo ja existe e vai avisar ao usuario sobre isso
+if os.path.exists(nome_arquivo_json):
+    print(f"Atençao: O arquivo {nome_arquivo_json} já existe e será sobrescrito.")
+if os.path.exists(nome_arquivo_csv):
+    print(f"Atençao: O arquivo {nome_arquivo_csv} já existe e será sobrescrito.")
+
+# vai salvar os arquivos no formato JSON
+try:
+    with open(nome_arquivo_json, 'w') as json_file:
+        json.dump(medias_calculadas, json_file, indent=4)
+except IOError as e:
+    print(f"Erro ao salvar o arquivo JSON: {e}")
+    exit()
+
+# vai salva as medias em um arquivo CSV
+try:
+    with open(nome_arquivo_csv, 'w') as csv_file:
+        csv_file.write('moeda;mes;mediaCompra;mediaVenda\n')
+        for mes in medias_calculadas:
+            mes_nome = meses_nomes[mes]
+            csv_file.write(f'{moeda_informada};{mes_nome};{medias_calculadas[mes]["mediaCompra"]:.5f};{medias_calculadas[mes]["mediaVenda"]:.5f}\n')
+except IOError as e:
+    print(f"Erro ao tenta salvar o arquivo CSV: {e}")
+    exit()
+
+print("deu tudo certo ;).")
+#gracas a deus deu certo ksksks
+#misericodia 130 de linha de codigo kkkk
